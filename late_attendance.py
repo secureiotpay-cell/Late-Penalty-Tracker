@@ -295,7 +295,7 @@ if uploaded:
             styled = (
                 result_df
                 .style
-                .applymap(style_fine, subset=["Fine (₹)"])
+                .map(style_fine, subset=["Fine (₹)"])
                 .format({"Fine (₹)": "₹{:,.0f}"})
                 .set_properties(**{"font-family": "DM Mono, monospace", "font-size": "13px"})
             )
