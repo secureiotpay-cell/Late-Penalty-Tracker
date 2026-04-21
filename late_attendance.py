@@ -161,47 +161,37 @@ with st.expander("📋 Fine Slab Reference", expanded=False):
     <div class="slab-row"><span>Every +3 days after</span><span class="amt">+₹50 per day in that slab</span></div>
 </div>
 <br><small style="color:#555;font-family:'DM Mono',monospace;">
-Late = Punch 1 strictly between 09:30 and 09:59 (inclusive of 09:30, exclusive of 10:00)
+Late = Punch 1 strictly between 09:31 and 09:59
 </small>
 """, unsafe_allow_html=True)
 
 # ── Fine calculation helper ───────────────────────────────────────────────────
 def calculate_fine(late_count: int) -> int:
-    """
-    Cumulative fine across all late days:
-    - Day 1–3  : ₹0 each   (grace period)
-    - Day 4–6  : ₹50 each
-    - Day 7–9  : ₹100 each
-    - Day 10–12: ₹150 each
-    - ... +₹50 per slab of 3
-    """
     total = 0
     for day in range(1, late_count + 1):
         if day <= 3:
             total += 0
         else:
-            # Which slab after grace? slab 1 = days 4-6, slab 2 = days 7-9, ...
             slab = (day - 4) // 3 + 1
             total += slab * 50
     return total
 
 # ── Parse & process CSV ───────────────────────────────────────────────────────
 def parse_and_process(file) -> pd.DataFrame:
-    # Read raw CSV, skip blank lines, drop trailing empty column
     df = pd.read_csv(file, dtype=str)
     df.columns = [c.strip() for c in df.columns]
     df = df.dropna(subset=["EmpID"])
     df = df[df["EmpID"].str.strip() != ""]
-
-    # Strip whitespace from all cells
     df = df.apply(lambda col: col.str.strip() if col.dtype == object else col)
 
-    # Rename punch columns safely
+    # Convert Date column
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
     punch_col = "1 Punch"
     if punch_col not in df.columns:
         raise ValueError(f"Column '{punch_col}' not found. Columns: {list(df.columns)}")
 
-    LATE_START = time(9, 30)
+    LATE_START = time(9, 31)
     LATE_END   = time(10, 0)
 
     results = []
@@ -209,11 +199,18 @@ def parse_and_process(file) -> pd.DataFrame:
     for (emp_id, emp_name), group in df.groupby(["EmpID", "EmpName"]):
         late_days = []
         for _, row in group.iterrows():
+
+            date_val = row.get("Date")
+
+            # Skip Saturdays
+            if pd.isna(date_val) or date_val.weekday() == 5:
+                continue
+
             punch1_raw = str(row.get(punch_col, "")).strip()
             if not punch1_raw or punch1_raw in ("", "nan"):
                 continue
+
             try:
-                # Parse HH:MM:SS or HH:MM
                 parts = punch1_raw.replace(" ", "").split(":")
                 h, m = int(parts[0]), int(parts[1])
                 punch_time = time(h, m)
@@ -222,7 +219,7 @@ def parse_and_process(file) -> pd.DataFrame:
 
             if LATE_START <= punch_time < LATE_END:
                 late_days.append({
-                    "date": row.get("Date", ""),
+                    "date": row.get("Date").strftime("%Y-%m-%d") if not pd.isna(row.get("Date")) else "",
                     "punch1": punch1_raw
                 })
 
@@ -241,8 +238,7 @@ def parse_and_process(file) -> pd.DataFrame:
     if not results:
         return pd.DataFrame()
 
-    out = pd.DataFrame(results).sort_values("Late Days", ascending=False).reset_index(drop=True)
-    return out
+    return pd.DataFrame(results).sort_values("Late Days", ascending=False).reset_index(drop=True)
 
 # ── File upload ───────────────────────────────────────────────────────────────
 st.markdown('<div class="section-label">Upload Report</div>', unsafe_allow_html=True)
@@ -257,13 +253,12 @@ if uploaded:
         result_df = parse_and_process(uploaded)
 
         if result_df.empty:
-            st.warning("No late arrivals found between 09:30 and 09:59 in the uploaded file.")
+            st.warning("No late arrivals found between 09:31 and 09:59 (Saturdays excluded).")
         else:
-            # ── Summary metrics ───────────────────────────────────────────
-            total_employees   = len(result_df)
-            fined_employees   = len(result_df[result_df["Fine (₹)"] > 0])
-            total_fine        = result_df["Fine (₹)"].sum()
-            most_late         = result_df["Late Days"].max()
+            total_employees = len(result_df)
+            fined_employees = len(result_df[result_df["Fine (₹)"] > 0])
+            total_fine = result_df["Fine (₹)"].sum()
+            most_late = result_df["Late Days"].max()
 
             c1, c2, c3, c4 = st.columns(4)
             for col, val, label in [
@@ -280,10 +275,8 @@ if uploaded:
 
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # ── Display table ─────────────────────────────────────────────
             st.markdown('<div class="section-label">Results</div>', unsafe_allow_html=True)
 
-            # Style the Fine column
             def style_fine(val):
                 if val == 0:
                     return "color: #4caf50; font-weight: 600;"
@@ -293,17 +286,13 @@ if uploaded:
                     return "color: #f44336; font-weight: 600;"
 
             styled = (
-                result_df
-                .style
+                result_df.style
                 .map(style_fine, subset=["Fine (₹)"])
                 .format({"Fine (₹)": "₹{:,.0f}"})
-                .set_properties(**{"font-family": "DM Mono, monospace", "font-size": "13px"})
             )
 
             st.dataframe(styled, use_container_width=True, hide_index=True)
 
-            # ── Download button ───────────────────────────────────────────
-            st.markdown("<br>", unsafe_allow_html=True)
             csv_out = result_df.to_csv(index=False).encode("utf-8")
             st.download_button(
                 label="⬇ Download Report as CSV",
@@ -318,7 +307,7 @@ if uploaded:
 
 else:
     st.markdown("""
-    <div style="text-align:center; padding: 3rem; color: #444; font-family: 'DM Mono', monospace; font-size:0.9rem;">
+    <div style="text-align:center; padding: 3rem; color: #444;">
         ↑ Upload a CSV file to get started
     </div>
     """, unsafe_allow_html=True)
